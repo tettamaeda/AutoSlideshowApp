@@ -25,8 +25,8 @@ public class MainActivity extends AppCompatActivity {
     private static final int PERMISSIONS_REQUEST_CODE = 100;
 
     Timer mTimer;
-    double mTimerSec = 0.0;
-    int imageMove = 0;
+
+    Cursor cursor;
 
     Handler mHandler = new Handler();
     ImageView imageVIew;
@@ -35,42 +35,45 @@ public class MainActivity extends AppCompatActivity {
     Button mAutoButton;
     Button mProceedButton;
 
-    ArrayList<Uri> imageUris = new ArrayList<Uri>();
-
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
+
+        //終了時の定義
+        Thread hook=new Thread(){
+            public void run() {
+                cursor.close();
+            }
+        };
+        Runtime.getRuntime().addShutdownHook(hook);
 
         // Android 6.0以降の場合
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             // パーミッションの許可状態を確認する
             if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
                 // 許可されている
-                getContentsInfo();
+                createCursor();
             } else {
                 // 許可されていないので許可ダイアログを表示する
                 requestPermissions(new String[]{Manifest.permission.READ_EXTERNAL_STORAGE}, PERMISSIONS_REQUEST_CODE);
             }
             // Android 5系以下の場合
         } else {
-            getContentsInfo();
+            createCursor();
         }
         Log.d("auto-slide", "get image uris");
 
         //Permissionがある場合、かつ保存された画像がある場合のみ通す
-        if(checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED && imageUris.size() > 0) {
+        if (checkSelfPermission(Manifest.permission.READ_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED && cursor.moveToFirst()) {
 
             imageVIew = (ImageView) findViewById(R.id.imageView);
 
-            //画像を表示するスレッドを立てる
-            mHandler.post(new Runnable() {
-                @Override
-                public void run() {
-                    imageVIew.setImageURI(imageUris.get(imageMove));
-                    Log.d("auto-slide", "display " + imageMove + "th image");
-                }
-            });
+            //初回画像表示
+            int fieldIndex = cursor.getColumnIndex(MediaStore.Images.Media._ID);
+            Long id = cursor.getLong(fieldIndex);
+            imageVIew.setImageURI(ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id));
+
 
             //ここからボタンのリスナー設定
             mReturnButton = (Button) findViewById(R.id.return_button);
@@ -82,41 +85,24 @@ public class MainActivity extends AppCompatActivity {
                 public void onClick(View v) {
                     if (mTimer == null) {
                         mAutoButton.setText("停止");
+                        mProceedButton.setEnabled(false);
+                        mReturnButton.setEnabled(false);
                         mTimer = new Timer();
                         mTimer.schedule(new TimerTask() {
                             @Override
                             public void run() {
-                                mTimerSec += 0.1;
-                                if (mTimerSec >= 2.0) {
-                                    //最後の画像のときの処理
-                                    if (imageMove >= imageUris.size() - 1) {
-                                        imageMove = 0;
-                                        mHandler.post(new Runnable() {
-                                            @Override
-                                            public void run() {
-                                                imageVIew.setImageURI(imageUris.get(imageMove));
-                                                Log.d("auto-slide", "display " + imageMove + "th image");
-                                            }
-                                        });
-                                    }
-                                    else {
-                                        mHandler.post(new Runnable() {
-                                            @Override
-                                            public void run() {
-                                                imageVIew.setImageURI(imageUris.get(++imageMove));
-                                                Log.d("auto-slide", "display " + imageMove + "th image");
-                                            }
-                                        });
-                                    }
-                                    mTimerSec = 0.0;
-                                }
-
+                                    mHandler.post(new Runnable() {
+                                        @Override
+                                        public void run() {
+                                            imageVIew.setImageURI(getUriProceed());
+                                        }
+                                    });
                             }
-                        }, 100, 100);
-                        Log.d("auto-slide", "start slideshow");
+                        }, 0, 2000);
                     } else {
                         mAutoButton.setText("再生");
-                        mTimerSec = 0.0;
+                        mProceedButton.setEnabled(true);
+                        mReturnButton.setEnabled(true);
                         mTimer.cancel();
                         mTimer = null;
                         Log.d("auto-slide", "stop slideshow");
@@ -129,16 +115,7 @@ public class MainActivity extends AppCompatActivity {
                 public void onClick(View v) {
                     //タイマーが動いているときは操作不可
                     if (mTimer == null) {
-                        //最初の画像のときの処理
-                        if (imageMove < 1) {
-                            imageMove = imageUris.size() - 1;
-                            imageVIew.setImageURI(imageUris.get(imageMove));
-                            Log.d("auto-slide", "display " + imageMove + "th image");
-                        }
-                        else {
-                            imageVIew.setImageURI(imageUris.get(--imageMove));
-                            Log.d("auto-slide", "display " + imageMove + "th image");
-                        }
+                            imageVIew.setImageURI(getUriReturn());
                     }
                 }
             });
@@ -147,22 +124,13 @@ public class MainActivity extends AppCompatActivity {
                 @Override
                 public void onClick(View v) {
                     //タイマーが動いているときは操作不可
+                    //set enableの方が良い
                     if (mTimer == null) {
-                        //最後の画像のときの処理
-                        if (imageMove >= imageUris.size() - 1){
-                            imageMove = 0;
-                            imageVIew.setImageURI(imageUris.get(imageMove));
-                            Log.d("auto-slide", "display " + imageMove + "th image");
-                        }
-                        else {
-                            imageVIew.setImageURI(imageUris.get(++imageMove));
-                            Log.d("auto-slide", "display " + imageMove + "th image");
-                        }
+                            imageVIew.setImageURI(getUriProceed());
                     }
                 }
             });
         }
-
     }
 
 
@@ -171,7 +139,7 @@ public class MainActivity extends AppCompatActivity {
         switch (requestCode) {
             case PERMISSIONS_REQUEST_CODE:
                 if (grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                    getContentsInfo();
+                    createCursor();
                 }
                 break;
             default:
@@ -179,32 +147,45 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private void getContentsInfo() {
+    private void createCursor() {
         // 画像の情報を取得する
         ContentResolver resolver = getContentResolver();
-        Cursor cursor = resolver.query(
+        cursor = resolver.query(
                 MediaStore.Images.Media.EXTERNAL_CONTENT_URI, // データの種類
                 null, // 項目(null = 全項目)
                 null, // フィルタ条件(null = フィルタなし)
                 null, // フィルタ用パラメータ
                 null // ソート (null ソートなし)
         );
+
         Log.d("auto-slide", "create cursor");
-
-        if (cursor.moveToFirst()) {
-            int count = 0;
-            do {
-                // indexからIDを取得し、そのIDから画像のURIを取得する
-                int fieldIndex = cursor.getColumnIndex(MediaStore.Images.Media._ID);
-                Long id = cursor.getLong(fieldIndex);
-                imageUris.add(ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id));
-
-                Log.d("auto-slide", "URI : " + imageUris.get(count).toString());
-                count++;
-            } while (cursor.moveToNext());
-        }
-        cursor.close();
     }
+
+
+    private Uri getUriProceed() {
+
+        if(!cursor.moveToNext()){
+            cursor.moveToFirst();
+        }
+
+        int fieldIndex = cursor.getColumnIndex(MediaStore.Images.Media._ID);
+        Long id = cursor.getLong(fieldIndex);
+        return ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
+
+    }
+
+    private Uri getUriReturn() {
+
+        if(!cursor.moveToPrevious()){
+            cursor.moveToLast();
+        }
+
+        int fieldIndex = cursor.getColumnIndex(MediaStore.Images.Media._ID);
+        Long id = cursor.getLong(fieldIndex);
+        return ContentUris.withAppendedId(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, id);
+
+    }
+
 }
 
 
